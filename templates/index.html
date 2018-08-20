@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+
+<!--
+Colors for evidence
+1A - Red
+1B - Orange
+2A - Yellow
+2B - Green
+3 - Blue
+4 - Gray
+
+-->
+
+
+
+    <h1>FHIR Demo</h1>
+    <!--Display the data from the patient resource, passed in as "pat"-->
+    <p>
+        {% block pat %}{{ pat|safe }}{% endblock %}
+    </p>
+    <!--Display the data from the observation resource, passed in as "obs"-->
+    <p>
+        {% block obs %}{{ obs }}{% endblock %}
+    </p>
+    <!--A link to initiate the HTT test-->
+    <a href='/results'>Order <i>HTT</i> test</a></br></br>
+    <!--Display the results of the HTT test, passed in as "seq"-->
+    <p>
+        {% block seq %}{{ seq }}{% endblock %}
+    </p>
+
+</body>
+</html>
