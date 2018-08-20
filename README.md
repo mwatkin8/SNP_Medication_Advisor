@@ -2,6 +2,8 @@
 
 This is a clinico-genomic SMART on FHIR app which uses patient-specific genetic variants (SNPs) to assist care providers in selecting optimal medication regimens. 
 
+![DNA to Meds](/images/SNP_med_advisor.png)
+
 Built using Python and Flask web services. this app provides several unique services:
 * SMART-standard web authentication.
 * Conversion from VCF to appropriate FHIR resources to represent, store, and access variants in the EHR.
