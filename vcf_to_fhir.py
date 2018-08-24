@@ -1,4 +1,4 @@
-import json, requests, argparse, sqlite3, re, datetime
+import json,requests,argparse,sqlite3,re,datetime,ast,base64,hashlib
 
 def parse_VCF(filename):
     with open(filename, 'r') as file:
@@ -12,8 +12,11 @@ def parse_VCF(filename):
             else:
                 rsID = line_list[2]
                 geno = extract_genotype(line_list)
+                chr  = line_list[0]
+                alt = line_list[4]
+                start = line_list[1]
                 if geno != 'no call':
-                    var_list.append((rsID, geno))
+                    var_list.append((rsID, geno, chr, alt, start))
         return var_list
 
 def extract_genotype(line_list):
@@ -42,6 +45,31 @@ def extract_genotype(line_list):
 
     geno = "".join(geno_list)
     return geno
+
+def digest(blob):
+    d = hashlib.sha512(blob.encode("ASCII")).digest()
+    return base64.urlsafe_b64encode(d[:24]).decode("ASCII")
+
+def generate_vmcID(chr, start, end, ref, alt):
+    vmcSeqID = query_vmc_seq_ids_db(ref, chr)
+    if vmcSeqID == 'No VMC Sequence ID found':
+        return 'Error creating VMC ID'
+    vmcLocID = 'VMC:GL_' + digest('<Location:<Identifier:' + vmcSeqID + '>:<Interval:' + str(start) + ':' + str(end) + '>>')
+    return 'VMC:GA_' + digest('<Allele:<Identifier:' + vmcLocID + '>:' + alt + '>')
+
+def query_vmc_seq_ids_db(ref, chr):
+    with sqlite3.connect('db/vmc_seq_ids.sqlite') as db:
+        cursor = db.cursor()
+        try:
+            cursor.execute("SELECT * FROM " + ref + " WHERE CHROMOSOME=" + chr)
+            rows = cursor.fetchall()
+            val = str(rows)
+            if val == '[]':
+                return 'No VMC Sequence ID found'
+            else:
+                print(val)
+                return val
+        except: return "database error"
 
 def query_pharmGKB_web(rsID):
     url = 'https://api.pharmgkb.org/v1/data/clinicalAnnotation?location.fingerprint=' + rsID + '&view=base'
@@ -75,14 +103,15 @@ def parse_annotations(annotation, geno):
     return ann.group()
 
 
-def create_obs(patient, rsID, geno, annotation):
+def create_obs(patient, vmcID, rsID, geno, annotation):
 
     if annotation != 'No pharmGKB clinical annotations found':
-        ann = parse_annotations(annotation, geno)
+        a = ast.literal_eval(annotation)
+        ann = parse_annotations(annotation, geno) + '|Evidence:' + a[0][3] + '|Related Chemicals:' + a[0][11]
     else:
-        ann = annotation
+        return annotation
 
-    #Since only SNPs are being queried for annqotations, each variant is stored as a "Simple variant" as defined in LOINC (https://s.details.loinc.org/LOINC/81252-9.html?sections=Comprehensive)
+    #Since only SNPs are being queried for annotations, each variant is stored as a "Simple variant" as defined in LOINC (https://s.details.loinc.org/LOINC/81252-9.html?sections=Comprehensive)
     obs = {
       "resourceType": "Observation",
       "text": {
@@ -104,6 +133,10 @@ def create_obs(patient, rsID, geno, annotation):
         ]
       },
       "identifier": [
+        {
+          "value": vmcID,
+          "system": "VMC"
+        },
         {
           "value": rsID,
           "system": "dbSNP"
@@ -167,7 +200,16 @@ if __name__=="__main__":
     for var in var_list:
         rsID = var[0]
         geno = var[1]
-        obs_list.append(create_obs(patient, rsID, geno, query_pharmGKB_db(rsID)))
+        chr = 'chr' + var[2]
+        alt = var[3]
+        start = var[4]
+        end = str(int(start) + 1)
+        # TODO an interactive way or extensive mapping system to select the right reference from the VCF and get the correct SeqID from the db.
+        ref = 'hg18'
+        vmcID = generate_vmcID(chr, start, end, ref, alt)
+        obs = create_obs(patient, vmcID, rsID, geno, query_pharmGKB_db(rsID))
+        if obs != 'No pharmGKB clinical annotations found':
+            obs_list.append(obs)
 
     #POST the Observation resources to the appropriate FHIR server
     obs_ids = []
