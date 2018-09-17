@@ -1,53 +1,63 @@
-from flask import Flask, render_template
+from flask import Flask, render_template, request
+from fhirclient import client
 import fhirclient.models.patient as p
 import fhirclient.models.observation as o
-import fhirclient.models.sequence as s
-from fhirclient import client
-import json
-import re
+import fhirclient.models.list as l
+import fhirclient.models.medication as m
+import fhirclient.models.condition as c
+import fhirclient.models.practitioner as pr
+import datetime
 
 # create the application object
-APP = Flask(__name__)
+APP = Flask(__name__, static_folder='static')
 settings = {
     'app_id': 'my_web_app',
-    'api_base': 'http://snapp.clinfhir.com:8081/baseDstu3/'
+    'api_base': 'http://fhirtest.uhn.ca/baseDstu3/'
 }
 #Initialize a global smart token to use as the server
 smart = client.FHIRClient(settings=settings)
-#The ID for the patient we wish to extract FHIR resources for
-patID = 'Patient/cf-1521035411812'
 
-def htt_test(fa):
-    #Find all repeat stretches
-    repeats = re.search('(CAG)+', fa.upper())
-    inter = False
-    red = False
-    pos = False
-    #Examine the length of each stretch, testRanges*3 because repeats are not decoupled
-    for r in repeats.group():
-        if len(r) > 78 and len(r) <= 105:
-            inter = True
-        elif len(r) > 105 and len(r) <= 117:
-            red = True
-        elif len(r) > 117:
-            pos = True
-    #Return test result
-    if pos:
-        return "POSITIVE"
-    elif red:
-        return "POSITIVE (REDUCED PENETRANCE)"
-    elif inter:
-        return "INTERMEDIATE"
-    else:
-        return "NEGATIVE"
-
-def getPatient():
+def getPatient(pID):
     """
         Extract basic demographic information from the Patient FHIR resource
     """
-    pID = patID.split('/')[1]
+
     patient = p.Patient.read(pID, smart.server).as_json()
-    return 'Name: ' + patient['name'][0]['text'] + '</br>Gender: ' + patient['gender'] + '</br>DOB: ' + patient['birthDate']
+    name = patient['name'][0]['given'][0] + " " + patient['name'][0]['family']
+    age = datetime.date.today().year - int(patient['birthDate'].split('-')[0])
+    return name,patient['gender'],age
+
+def getMedications(pID):
+    medications = ""
+    search = l.List.where(struct={'subject': pID})
+    lists = search.perform_resources(smart.server)
+    for list in lists:
+        list_json = list.as_json()
+        if list_json['title'] == 'Medications':
+            for entry in list_json['entry']:
+                mID = entry['item']['reference'].split('/')[1]
+                search = m.Medication.where(struct={'_id': mID})
+                meds = search.perform_resources(smart.server)
+                for med in meds:
+                    med_json = med.as_json()
+                    medications = medications + med_json['code']['coding'][0]['display'] + ", "
+    return medications
+
+def getCondition(pID):
+    problem_list = ""
+    practitioner = ""
+    search = c.Condition.where(struct={'subject': pID})
+    conditions = search.perform_resources(smart.server)
+    for con in conditions:
+        problem_list = problem_list + con.as_json()['code']['coding'][0]['display']
+        search = pr.Practitioner.where(struct={'_id': con.as_json()['asserter']['reference'].split('/')[1]})
+        practitioners = search.perform_resources(smart.server)
+        for practs in practitioners:
+            practitioner = practitioner + practs.as_json()['name'][0]['given'][0] + ' ' + \
+                           practs.as_json()['name'][0]['family'] + ', ' + \
+                           practs.as_json()['qualification'][0]['code']['text'] + ', ' + \
+                           practs.as_json()['telecom'][0]['value']
+    return practitioner,problem_list
 
 def getObservations():
     """
@@ -59,29 +69,30 @@ def getObservations():
         o_out = obs.as_json()
     return 'Reason for visit: ' + o_out['code']['coding'][0]['display']
 
-@APP.route('/results')
-def getSequence():
-    """
-        Extract a fasta file from the Sequence FHIR resource
-    """
-    search = s.Sequence.where(struct={'patient': patID})
-    sequences = search.perform_resources(smart.server)
-    for seq in sequences:
-        s_out = htt_test(seq.as_json()['observedSeq'])
-    p_out = getPatient()
-    o_out = getObservations()
-
-    return render_template('index.html', pat=p_out, obs=o_out, seq=s_out)
+@APP.route('/get-patient', methods=['GET'])
+def getPatientID():
+    if 'file' not in request.files:
+        return ""
+    file = request.files['file']
 
 
-@APP.route('/')
+@APP.route('/', methods=['GET', 'POST'])
 def home():
     """
         Landing page for the app, displays patient and observation data by default
     """
-    p_out = getPatient()
-    o_out = getObservations()
-    return render_template('index.html', pat=p_out, obs=o_out)
+    if request.method == 'POST':
+        name = request.form['patients']
+
+        if name == 'Michael':
+            pID = 'cf-1537060831781'
+
+        name,gender,age = getPatient(pID)
+        medications = getMedications(pID)[:-2]
+        practitioner,problem_list = getCondition(pID)
+        return render_template('index.html', name=name, gender=gender, age=age, meds=medications, prob=problem_list, practitioner=practitioner)
+    else:
+        return render_template('test_patients.html')
 
 # start the server with the 'run()' method
 if __name__ == '__main__':
